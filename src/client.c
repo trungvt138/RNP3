@@ -6,50 +6,96 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <sys/select.h>
 
-#define SRV_ADDRESS "127.0.0.1"
-#define SRV_PORT 7777
+#define MAX_COMMAND_LENGTH 256
+
+struct addrinfo {
+    int ai_flags;           // Input flags
+    int ai_family;          // Address family of the socket
+    int ai_socktype;        // Socket type
+    int ai_protocol;        // Protocol of the socket
+    socklen_t ai_addrlen;   // Length of socket address
+    struct sockaddr* ai_addr; // Socket address for the socket
+    char* ai_canonname;     // Canonical name of the host
+    struct addrinfo* ai_next; // Pointer to the next addrinfo structure
+};
+
 
 int main(int argc, char** argv) {
   if (argc != 3) {
-    printf("Usage: %s <server-address> <server-port>\n", argv[0]);
+    printf("Usage: %s <server_address> <server_port>\n", argv[0]);
     return 1;
   }
 
   const char* serverAddress = argv[1];
-  int serverPort = atoi(argv[2]);
+  const char* serverPort = argv[2];
 
-  int s_tcp;
-  struct sockaddr_in sa;
+  struct addrinfo hints, *serverInfo;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
 
-  sa.sin_family = AF_INET;
-  sa.sin_port = htons(serverPort);
-
-  if (inet_pton(sa.sin_family, serverAddress, &sa.sin_addr.s_addr) <= 0) {
-    perror("Address Conversion");
+  if (getaddrinfo(serverAddress, serverPort, &hints, &serverInfo) != 0) {
+    perror("getaddrinfo");
     return 1;
   }
 
-  if ((s_tcp = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
-    perror("TCP Socket");
+  int clientSocket = socket(serverInfo->ai_family, serverInfo->ai_socktype, serverInfo->ai_protocol);
+  if (clientSocket < 0) {
+    perror("Socket");
     return 1;
   }
 
-  if (connect(s_tcp, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
+  if (connect(clientSocket, serverInfo->ai_addr, serverInfo->ai_addrlen) < 0) {
     perror("Connect");
     return 1;
   }
 
-  const char* commands[] = {"List", "Files", "Get data", "Put data"};
+  printf("Connected to server. Enter commands (List, Files, Get <filename>, Put <filename>, Quit):\n");
 
-  for (int i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
-    ssize_t n;
-    if ((n = send(s_tcp, commands[i], strlen(commands[i]), 0)) > 0) {
-      printf("Command '%s' sent (%zi bytes).\n", commands[i], n);
-      send(s_tcp, "\x04", 1, 0);  // Send EOT character
+  char command[MAX_COMMAND_LENGTH];
+
+  while (1) {
+    printf("> ");
+    fflush(stdout);
+
+    if (fgets(command, sizeof(command), stdin) == NULL) {
+      break;
     }
+
+    // Remove trailing newline character
+    command[strcspn(command, "\n")] = '\0';
+
+    if (send(clientSocket, command, strlen(command), 0) < 0) {
+      perror("Send");
+      break;
+    }
+
+    if (strcmp(command, "Quit") == 0) {
+      printf("Exiting...\n");
+      break;
+    }
+
+    // Receive and display the server response
+    char response[MAX_COMMAND_LENGTH];
+    ssize_t bytesRead;
+
+    if ((bytesRead = recv(clientSocket, response, sizeof(response) - 1, 0)) < 0) {
+      perror("Receive");
+      break;
+    }
+
+    if (bytesRead == 0) {
+      printf("Server closed the connection\n");
+      break;
+    }
+
+    response[bytesRead] = '\0';
+    printf("Response: %s\n", response);
   }
 
-  close(s_tcp);
+  freeaddrinfo(serverInfo);
+  close(clientSocket);
   return 0;
 }
