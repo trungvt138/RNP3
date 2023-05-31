@@ -1,0 +1,7 @@
+/*
+!/.gitignore
+!/src/client.c
+!/src/CMakeLists.txt
+!/src/server.c
+!README.md
+!CMakeLists.txt
