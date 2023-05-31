@@ -60,10 +60,7 @@ void handleListCommand(int clientSocket, int* clientSockets) {
   sprintf(response + strlen(response), "Total Clients: %d\n", numClients);
 
   // Send the response back to the client
-  if (send(clientSocket, response, strlen(response), 0) < 0) {
-    perror("Send");
-    return;
-  }
+  send(clientSocket, response, strlen(response), 0);
 }
 
 void handleFilesCommand(int clientSocket) {
@@ -349,7 +346,6 @@ int main(int argc, char** argv) {
       }
 
       printf("New connection established\n");
-      printf("%d\n", fdmax);
     }
 
     for (int i = 0; i < MAX_CLIENTS; i++) {
