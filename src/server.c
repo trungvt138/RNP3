@@ -121,44 +121,33 @@ void handleGetCommand(int clientSocket, const char* command) {
     return;
   }
 
-  // Read the file content and calculate the file size
-  fseek(file, 0, SEEK_END);
-  long fileSize = ftell(file);
-  fseek(file, 0, SEEK_SET);
-
-  // Read the file content into a buffer
-  char* fileContent = (char*)malloc(fileSize + 1);
-  if (fileContent == NULL) {
-    perror("Memory allocation");
-    fclose(file);
-    return;
-  }
-  fread(fileContent, 1, fileSize, file);
-  fileContent[fileSize] = '\0';
-
-  fclose(file);
-
   // Get the last modified time of the file
   struct stat fileStat;
   if (stat(filename, &fileStat) == -1) {
     perror("File stat");
-    free(fileContent);
+    fclose(file);
     return;
   }
   time_t lastModified = fileStat.st_mtime;
 
-  // Prepare the response with the file content and attributes
-  char response[4096];
-  snprintf(response, sizeof(response), "Filename: %s\nLast Modified: %s\nSize: %ld bytes\n\n%s",
-           filename, ctime(&lastModified), fileSize, fileContent);
+  // Send the file attributes as the first response
+  char response[256];
+  snprintf(response, sizeof(response), "Filename: %s\nLast Modified: %s\nSize: %ld bytes\n",
+           filename, ctime(&lastModified), fileStat.st_size);
+  send(clientSocket, response, strlen(response), 0);
 
-  free(fileContent);
-
-  // Send the response to the client
-  if (send(clientSocket, response, strlen(response), 0) < 0) {
-    perror("Send");
-    return;
+  // Send the file content as a stream
+  char buffer[1024];
+  size_t bytesRead;
+  while ((bytesRead = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+    send(clientSocket, buffer, bytesRead, 0);
   }
+
+  // Mark the end of the stream with the EOT character
+  char eot = 4;
+  send(clientSocket, &eot, sizeof(eot), 0);
+
+  fclose(file);
 }
 
 void handlePutCommand(int clientSocket, const char* command) {
