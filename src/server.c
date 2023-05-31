@@ -15,7 +15,7 @@
 #define DEFAULT_PORT 0
 #define MAX_CLIENTS 10
 #define BUFFER_SIZE 1024
-#define EOT_CHAR '\x04'
+const char EOT_CHAR = 4;
 
 typedef struct {
   char hostname[256];
@@ -101,7 +101,7 @@ void handleCommand(int clientSocket, int* clientSockets, const char* command) {
       strftime(fileAttributes, sizeof(fileAttributes), "%Y-%m-%d %H:%M:%S", localtime(&fileStat.st_mtime));
 
       // Append the file information to the response string
-      char fileInfo[512];
+      char fileInfo[1024];
       sprintf(fileInfo, "%s - Size: %ld bytes, Last Modified: %s\n", entry->d_name, fileStat.st_size, fileAttributes);
       strcat(response, fileInfo);
       numFiles++;
@@ -131,7 +131,7 @@ void handleCommand(int clientSocket, int* clientSockets, const char* command) {
     if (file == NULL) {
       perror("fopen");
       sendStream(clientSocket, "File not found.\n", 16);
-      sendStream(clientSocket, EOT_CHAR, 1);
+      sendStream(clientSocket, (char*)&EOT_CHAR, 1);
       return;
     }
 
@@ -165,110 +165,120 @@ void handleCommand(int clientSocket, int* clientSockets, const char* command) {
   }
 }
 
-int main() {
-  // Create a TCP socket
-  int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-  if (serverSocket < 0) {
-    perror("Socket");
+int main(int argc, char** argv) {
+  if (argc > 2) {
+    printf("Usage: %s [port]\n", argv[0]);
     return 1;
   }
 
-  // Set up the server address
-  struct sockaddr_in serverAddr;
-  serverAddr.sin_family = AF_INET;
-  serverAddr.sin_port = htons(DEFAULT_PORT);
-  serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+  int serverPort = DEFAULT_PORT;
+  if (argc == 2) {
+    serverPort = atoi(argv[1]);
+  }
 
-  // Bind the socket to the server address
-  if (bind(serverSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
+  int s_tcp;
+  struct sockaddr_in sa, sa_client;
+  unsigned int sa_len = sizeof(struct sockaddr_in);
+  char command[256];
+
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(serverPort);
+  sa.sin_addr.s_addr = INADDR_ANY;
+
+  if ((s_tcp = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
+    perror("TCP Socket");
+    return 1;
+  }
+
+  if (bind(s_tcp, (struct sockaddr*)&sa, sa_len) < 0) {
     perror("Bind");
-    close(serverSocket);
     return 1;
   }
 
-  // Listen for incoming connections
-  if (listen(serverSocket, MAX_CLIENTS) < 0) {
+  if (serverPort == DEFAULT_PORT) {
+    if (getsockname(s_tcp, (struct sockaddr*)&sa, &sa_len) < 0) {
+      perror("Get socket name");
+      return 1;
+    }
+    printf("Server port assigned by the operating system: %d\n", ntohs(sa.sin_port));
+  }
+
+  if (listen(s_tcp, 5) < 0) {
     perror("Listen");
-    close(serverSocket);
+    close(s_tcp);
     return 1;
   }
 
-  // Initialize client socket array
+  printf("Waiting for TCP connections...\n");
+
+  fd_set master;
+  fd_set read_fds;
+  int fdmax;
+
+  FD_ZERO(&master);
+  FD_ZERO(&read_fds);
+
+  FD_SET(s_tcp, &master);
+  fdmax = s_tcp;
+
   int clientSockets[MAX_CLIENTS];
   for (int i = 0; i < MAX_CLIENTS; i++) {
     clientSockets[i] = -1;
   }
 
-  // Set of socket descriptors
-  fd_set readfds;
-  int maxSocket = serverSocket;
-
   while (1) {
-    // Clear the socket set
-    FD_ZERO(&readfds);
+    read_fds = master;
 
-    // Add server socket to the set
-    FD_SET(serverSocket, &readfds);
-
-    // Add child sockets to the set
-    for (int i = 0; i < MAX_CLIENTS; i++) {
-      int socket = clientSockets[i];
-      if (socket != -1) {
-        FD_SET(socket, &readfds);
-        if (socket > maxSocket) {
-          maxSocket = socket;
-        }
-      }
-    }
-
-    // Wait for activity on any of the sockets
-    if (select(maxSocket + 1, &readfds, NULL, NULL, NULL) < 0) {
-      perror("Select");
-      close(serverSocket);
-      return 1;
-    }
-
-    // Check for incoming connection on the server socket
-    if (FD_ISSET(serverSocket, &readfds)) {
-      struct sockaddr_in clientAddr;
-      socklen_t clientAddrLen = sizeof(clientAddr);
-      int clientSocket = accept(serverSocket, (struct sockaddr*)&clientAddr, &clientAddrLen);
-      if (clientSocket < 0) {
-        perror("Accept");
-        close(serverSocket);
+    if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) == -1) {
+        perror("Select");
         return 1;
-      }
-
-      // Add new client socket to the array
-      for (int i = 0; i < MAX_CLIENTS; i++) {
-        if (clientSockets[i] == -1) {
-          clientSockets[i] = clientSocket;
-          break;
-        }
-      }
     }
 
-    // Check for activity on any of the client sockets
+    if (FD_ISSET(s_tcp, &read_fds)) {
+      int newSocket;
+      if ((newSocket = accept(s_tcp, (struct sockaddr*)&sa_client, &sa_len)) < 0) {
+          perror("Accept");
+          close(s_tcp);
+          return 1;
+      }
+
+      // Add the new client socket to the array
+      int i;
+      for (i = 0; i < MAX_CLIENTS; i++) {
+        if (clientSockets[i] == -1) {
+            clientSockets[i] = newSocket;
+            break;
+        }
+      }
+
+      FD_SET(newSocket, &master);
+      if (newSocket > fdmax) {
+        fdmax = newSocket;
+      }
+
+      printf("New connection established\n");
+      printf("%d\n", fdmax);
+    }
+
     for (int i = 0; i < MAX_CLIENTS; i++) {
-      int clientSocket = clientSockets[i];
-      if (clientSocket != -1 && FD_ISSET(clientSocket, &readfds)) {
-        char buffer[BUFFER_SIZE];
-        ssize_t bytesRead = recv(clientSocket, buffer, sizeof(buffer), 0);
-        if (bytesRead <= 0) {
-          // Connection closed or error occurred, remove the client socket from the array
-          close(clientSocket);
+      if (clientSockets[i] != -1 && FD_ISSET(clientSockets[i], &read_fds)) {
+        ssize_t n;
+        if ((n = recv(clientSockets[i], command, sizeof(command) - 1, 0)) > 0) {
+          command[n] = '\0';
+          printf("Command received: %s\n", command);
+          handleCommand(clientSockets[i], clientSockets, command);
+        } else if (n == 0) {
+          printf("Client disconnected\n");
+          close(clientSockets[i]);
+          FD_CLR(clientSockets[i], &master);
           clientSockets[i] = -1;
         } else {
-          // Handle the received command
-          buffer[bytesRead] = '\0';
-          handleCommand(clientSocket, clientSockets, buffer);
+          perror("Receive");
         }
       }
     }
   }
 
-  // Close the server socket
-  close(serverSocket);
-
+  close(s_tcp);
   return 0;
 }
