@@ -1,0 +1,6 @@
+/home/trung/RNP3/build/CMakeFiles/edit_cache.dir
+/home/trung/RNP3/build/CMakeFiles/rebuild_cache.dir
+/home/trung/RNP3/build/src/CMakeFiles/client.dir
+/home/trung/RNP3/build/src/CMakeFiles/server.dir
+/home/trung/RNP3/build/src/CMakeFiles/edit_cache.dir
+/home/trung/RNP3/build/src/CMakeFiles/rebuild_cache.dir
