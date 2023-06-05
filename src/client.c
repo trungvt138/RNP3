@@ -1,15 +1,46 @@
-#include <arpa/inet.h>
-#include <netinet/in.h>
 #include <stdio.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
 #include <stdlib.h>
-#include <sys/select.h>
+#include <string.h>
+#include <unistd.h>
 #include <netdb.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #define MAX_COMMAND_LENGTH 256
+#define MAX_RESPONSE_LENGTH 4096
+
+void responseToClientInChunk(int clientSocket, char* response) {
+  // Send the response to the client in chunks
+  const char EOT = 4;
+  size_t responseLength = strlen(response);
+  size_t sentBytes = 0;
+  while (sentBytes < responseLength) {
+    size_t chunkSize = responseLength - sentBytes;
+    if (chunkSize > MAX_RESPONSE_LENGTH - 1) {
+      chunkSize = MAX_RESPONSE_LENGTH - 1;
+    }
+
+    // Copy a chunk of the response to a temporary buffer
+    char chunk[MAX_RESPONSE_LENGTH];
+    memcpy(chunk, response + sentBytes, chunkSize);
+    chunk[chunkSize] = '\0';
+
+    // Send the chunk to the client
+    if (send(clientSocket, chunk, strlen(chunk), 0) < 0) {
+      perror("Send");
+      break;
+    }
+
+    sentBytes += chunkSize;
+  }
+
+  // Send the EOT delimiter to mark the end of the response
+  if (send(clientSocket, &EOT, sizeof(EOT), 0) < 0) {
+    perror("Send");
+  }
+}
 
 int main(int argc, char** argv) {
   if (argc != 3) {
@@ -22,7 +53,7 @@ int main(int argc, char** argv) {
 
   struct addrinfo hints, *serverInfo;
   memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_INET;
+  hints.ai_family = AF_UNSPEC;  // Allow both IPv4 and IPv6
   hints.ai_socktype = SOCK_STREAM;
 
   if (getaddrinfo(serverAddress, serverPort, &hints, &serverInfo) != 0) {
@@ -30,17 +61,43 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  int clientSocket = socket(serverInfo->ai_family, serverInfo->ai_socktype, serverInfo->ai_protocol);
+  int clientSocket = -1;
+  struct addrinfo* p;
+  for (p = serverInfo; p != NULL; p = p->ai_next) {
+    clientSocket = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+    if (clientSocket < 0) {
+      perror("Socket");
+      continue;
+    }
+
+    if (connect(clientSocket, p->ai_addr, p->ai_addrlen) == 0) {
+      // Connection successful
+      break;
+    }
+
+    close(clientSocket);
+    clientSocket = -1;
+  }
+
   if (clientSocket < 0) {
-    perror("Socket");
-    return 1;
-  }
-
-  if (connect(clientSocket, serverInfo->ai_addr, serverInfo->ai_addrlen) < 0) {
     perror("Connect");
+    freeaddrinfo(serverInfo);
     return 1;
   }
 
+  char serverIP[INET6_ADDRSTRLEN];
+  void* serverAddr;
+  if (serverInfo->ai_family == AF_INET) {
+    struct sockaddr_in* ipv4 = (struct sockaddr_in*)serverInfo->ai_addr;
+    serverAddr = &(ipv4->sin_addr);
+    inet_ntop(AF_INET, serverAddr, serverIP, INET_ADDRSTRLEN);
+  } else {
+    struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)serverInfo->ai_addr;
+    serverAddr = &(ipv6->sin6_addr);
+    inet_ntop(AF_INET6, serverAddr, serverIP, INET6_ADDRSTRLEN);
+  }
+
+  printf("Connected to server at %s\n", serverIP);
   printf("Connected to server. Enter commands (List, Files, Get <filename>, Put <filename>, Quit):\n");
 
   char command[MAX_COMMAND_LENGTH];
@@ -67,10 +124,9 @@ int main(int argc, char** argv) {
     }
 
     // Receive and display the server response
-    char response[MAX_COMMAND_LENGTH];
-    ssize_t bytesRead;
-
-    if ((bytesRead = recv(clientSocket, response, sizeof(response) - 1, 0)) < 0) {
+    char response[MAX_RESPONSE_LENGTH];
+    ssize_t bytesRead = recv(clientSocket, response, sizeof(response) - 1, 0);
+    if (bytesRead < 0) {
       perror("Receive");
       break;
     }

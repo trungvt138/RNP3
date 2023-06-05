@@ -13,12 +13,47 @@
 #include <netdb.h>
 
 #define DEFAULT_PORT 0
+#define CHUNK_SIZE 1024
+#define MAX_RESPONSE_LENGTH 4096
+#define MAX_COMMAND_LENGTH 256
 #define MAX_CLIENTS 10
 
 typedef struct {
   char hostname[256];
   int port;
 } ClientInfo;
+
+void responseToClientInChunk(int clientSocket, const char* response) {
+  // Send the response to the client in chunks
+  const char EOT = 4;
+  size_t responseLength = strlen(response);
+  size_t sentBytes = 0;
+  while (sentBytes < responseLength) {
+    size_t chunkSize = responseLength - sentBytes;
+    if (chunkSize > MAX_RESPONSE_LENGTH - 1) {
+      chunkSize = MAX_RESPONSE_LENGTH - 1;
+    }
+
+    // Copy a chunk of the response to a temporary buffer
+    char chunk[MAX_RESPONSE_LENGTH];
+    memcpy(chunk, response + sentBytes, chunkSize);
+    chunk[chunkSize] = '\0';
+
+    // Send the chunk to the client
+    if (send(clientSocket, chunk, chunkSize, 0) < 0) {
+      perror("Send");
+      break;
+    }
+
+    sentBytes += chunkSize;
+  }
+
+  // Send the EOT delimiter to mark the end of the response
+  if (send(clientSocket, &EOT, sizeof(EOT), 0) < 0) {
+    perror("Send");
+  }
+}
+
 
 void handleListCommand(int clientSocket, int* clientSockets) {
   // Create an array to store the client information
@@ -40,17 +75,17 @@ void handleListCommand(int clientSocket, int* clientSockets) {
   }
 
   // Create the response string
-  char response[256];
+  char response[MAX_RESPONSE_LENGTH];
   sprintf(response, "Connected Clients:\n");
   for (int i = 0; i < numClients; i++) {
-    char clientInfo[256];
-    sprintf(clientInfo, "%s:%d\n", clients[i].hostname, clients[i].port);
-    strcat(response, clientInfo);
+      char clientInfo[256];
+      sprintf(clientInfo, "%s:%d\n", clients[i].hostname, clients[i].port);
+      strcat(response, clientInfo);
   }
-  sprintf(response + strlen(response), "Total Clients: %d\n", numClients);
+  sprintf(response + strlen(response), "Total Clients: %d", numClients);
 
-  // Send the response back to the client
-  send(clientSocket, response, strlen(response), 0);
+  // Send the response to the client in chunks
+  responseToClientInChunk(clientSocket, response);
 }
 
 void handleFilesCommand(int clientSocket) {
@@ -86,16 +121,8 @@ void handleFilesCommand(int clientSocket) {
     numFiles++;
   }
 
-  // Append the total number of files to the response string
-  snprintf(response + strlen(response), sizeof(response) - strlen(response), "Total Files: %d\n", numFiles);
-
-  closedir(dir);
-
-  // Send the response to the client
-  if (send(clientSocket, response, strlen(response), 0) < 0) {
-    perror("Send");
-    return;
-  }
+  // Send the response to the client in chunks
+  responseToClientInChunk(clientSocket, response);
 }
 
 void handleGetCommand(int clientSocket, const char* command) {
@@ -150,11 +177,8 @@ void handleGetCommand(int clientSocket, const char* command) {
 
   free(fileContent);
 
-  // Send the response to the client
-  if (send(clientSocket, response, strlen(response), 0) < 0) {
-    perror("Send");
-    return;
-  }
+  // Send the response to the client in chunks
+  responseToClientInChunk(clientSocket, response);
 }
 
 void handlePutCommand(int clientSocket, const char* command) {
@@ -226,13 +250,10 @@ void handlePutCommand(int clientSocket, const char* command) {
   char datetime[64];
   strftime(datetime, sizeof(datetime), "%Y-%m-%d %H:%M:%S", timeInfo);
 
-  // Send the response to the client
-  char response[512];
+  // Send the response to the client in chunks
+  char response[MAX_RESPONSE_LENGTH];
   snprintf(response, sizeof(response), "OK %s\n%s\n%s", hostname, serverIP, datetime);
-  if (send(clientSocket, response, strlen(response), 0) < 0) {
-    perror("Send");
-    return;
-  }
+  responseToClientInChunk(clientSocket, response);
 }
 
 void handleCommand(int clientSocket, int* clientSockets, const char* command) {
@@ -262,30 +283,51 @@ int main(int argc, char** argv) {
   }
 
   int s_tcp;
-  struct sockaddr_in sa, sa_client;
-  unsigned int sa_len = sizeof(struct sockaddr_in);
+  struct sockaddr_storage sa, sa_client;
+  socklen_t sa_len = sizeof(struct sockaddr_storage);
   char command[256];
 
-  sa.sin_family = AF_INET;
-  sa.sin_port = htons(serverPort);
-  sa.sin_addr.s_addr = INADDR_ANY;
+  struct addrinfo hints, *serverInfo;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;  // Allow both IPv4 and IPv6
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;  // Use the IP address of the host
 
-  if ((s_tcp = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
+  char serverPortStr[6];
+  snprintf(serverPortStr, sizeof(serverPortStr), "%d", serverPort);
+
+  if (getaddrinfo(NULL, serverPortStr, &hints, &serverInfo) != 0) {
+    perror("getaddrinfo");
+    return 1;
+  }
+
+  s_tcp = socket(serverInfo->ai_family, serverInfo->ai_socktype, serverInfo->ai_protocol);
+  if (s_tcp < 0) {
     perror("TCP Socket");
+    freeaddrinfo(serverInfo);
     return 1;
   }
 
-  if (bind(s_tcp, (struct sockaddr*)&sa, sa_len) < 0) {
+  if (bind(s_tcp, serverInfo->ai_addr, serverInfo->ai_addrlen) < 0) {
     perror("Bind");
+    freeaddrinfo(serverInfo);
     return 1;
   }
 
-  if (serverPort == DEFAULT_PORT) {
-    if (getsockname(s_tcp, (struct sockaddr*)&sa, &sa_len) < 0) {
-      perror("Get socket name");
-      return 1;
-    }
-    printf("Server port assigned by the operating system: %d\n", ntohs(sa.sin_port));
+  freeaddrinfo(serverInfo);
+
+  if (getsockname(s_tcp, (struct sockaddr*)&sa, &sa_len) < 0) {
+    perror("Get socket name");
+    close(s_tcp);
+    return 1;
+  }
+
+  if (sa.ss_family == AF_INET) {
+    struct sockaddr_in* ipv4 = (struct sockaddr_in*)&sa;
+    printf("Server port assigned by the operating system: %d\n", ntohs(ipv4->sin_port));
+  } else {
+    struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)&sa;
+    printf("Server port assigned by the operating system: %d\n", ntohs(ipv6->sin6_port));
   }
 
   if (listen(s_tcp, 5) < 0) {
@@ -349,15 +391,20 @@ int main(int argc, char** argv) {
         ssize_t n;
         if ((n = recv(clientSockets[i], command, sizeof(command) - 1, 0)) > 0) {
           command[n] = '\0';
-          printf("Command received: %s\n", command);
+          printf("Received command from client: %s\n", command);
+
           handleCommand(clientSockets[i], clientSockets, command);
         } else if (n == 0) {
-          printf("Client disconnected\n");
+          // Connection closed by the client
+          printf("Client closed the connection\n");
           close(clientSockets[i]);
           FD_CLR(clientSockets[i], &master);
           clientSockets[i] = -1;
         } else {
           perror("Receive");
+          close(clientSockets[i]);
+          FD_CLR(clientSockets[i], &master);
+          clientSockets[i] = -1;
         }
       }
     }
