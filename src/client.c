@@ -85,20 +85,21 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  char serverIP[INET6_ADDRSTRLEN];
-  void* serverAddr;
-  if (serverInfo->ai_family == AF_INET) {
-    struct sockaddr_in* ipv4 = (struct sockaddr_in*)serverInfo->ai_addr;
-    serverAddr = &(ipv4->sin_addr);
-    inet_ntop(AF_INET, serverAddr, serverIP, INET_ADDRSTRLEN);
+  char serverAddressStr[INET6_ADDRSTRLEN];
+  void* serverIP = NULL;
+  if (p->ai_family == AF_INET) {
+    struct sockaddr_in* ipv4 = (struct sockaddr_in*)p->ai_addr;
+    serverIP = &(ipv4->sin_addr);
   } else {
-    struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)serverInfo->ai_addr;
-    serverAddr = &(ipv6->sin6_addr);
-    inet_ntop(AF_INET6, serverAddr, serverIP, INET6_ADDRSTRLEN);
+    struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)p->ai_addr;
+    serverIP = &(ipv6->sin6_addr);
   }
 
-  printf("Connected to server at %s\n", serverIP);
-  printf("Connected to server. Enter commands (List, Files, Get <filename>, Put <filename>, Quit):\n");
+  // Convert the IP address to a human-readable format
+  inet_ntop(p->ai_family, serverIP, serverAddressStr, sizeof(serverAddressStr));
+  printf("Connected to server at %s. Enter commands (List, Files, Get <filename>, Put <filename>, Quit):\n", serverAddressStr);
+
+  freeaddrinfo(serverInfo);
 
   char command[MAX_COMMAND_LENGTH];
 
@@ -125,10 +126,21 @@ int main(int argc, char** argv) {
 
     // Receive and display the server response
     char response[MAX_RESPONSE_LENGTH];
-    ssize_t bytesRead = recv(clientSocket, response, sizeof(response) - 1, 0);
-    if (bytesRead < 0) {
-      perror("Receive");
-      break;
+    ssize_t bytesRead = 0;
+    while (1) {
+      ssize_t chunkBytesRead = recv(clientSocket, response + bytesRead, sizeof(response) - bytesRead - 1, 0);
+      if (chunkBytesRead < 0) {
+        perror("Receive");
+        break;
+      }
+
+      bytesRead += chunkBytesRead;
+
+      // Check if the end of the response has been reached
+      if (response[bytesRead - 1] == 4) {
+        response[bytesRead - 1] = '\0'; // Remove the EOT delimiter
+        break;
+      }
     }
 
     if (bytesRead == 0) {
@@ -136,11 +148,9 @@ int main(int argc, char** argv) {
       break;
     }
 
-    response[bytesRead] = '\0';
     printf("Response: %s\n", response);
   }
 
-  freeaddrinfo(serverInfo);
   close(clientSocket);
   return 0;
 }

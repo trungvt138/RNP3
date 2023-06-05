@@ -260,7 +260,7 @@ void handleCommand(int clientSocket, int* clientSockets, const char* command) {
   if (strcmp(command, "List") == 0) {
     handleListCommand(clientSocket, clientSockets);
   }
-  else if (strcmp(command, "Files") == 0) {
+  else if (strncmp(command, "Files", 5) == 0) {
     handleFilesCommand(clientSocket);
   }
   else if (strncmp(command, "Get", 3) == 0) {
