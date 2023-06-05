@@ -268,6 +268,11 @@ void handleCommand(int clientSocket, int* clientSockets, const char* command) {
   }
   else if (strncmp(command, "Put", 3) == 0) {
     handlePutCommand(clientSocket, command);
+  } 
+  else {
+    // Invalid command received, force the client to send the right command
+    const char* response = "Invalid command. Please send a valid command (List, Files, Get <filename>, Put <filename>)";
+    responseToClientInChunk(clientSocket, response);
   }
 }
 

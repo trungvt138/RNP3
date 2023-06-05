@@ -114,6 +114,11 @@ int main(int argc, char** argv) {
     // Remove trailing newline character
     command[strcspn(command, "\n")] = '\0';
 
+    if (strcmp(command, "") == 0) {
+      // Ignore empty command and continue to the next iteration
+      continue;
+    }
+
     if (send(clientSocket, command, strlen(command), 0) < 0) {
       perror("Send");
       break;
@@ -139,6 +144,11 @@ int main(int argc, char** argv) {
       // Check if the end of the response has been reached
       if (response[bytesRead - 1] == 4) {
         response[bytesRead - 1] = '\0'; // Remove the EOT delimiter
+        // Check if the response is an error message
+        if (strcmp(response, "Invalid command") == 0) {
+          printf("Invalid command. Please enter a valid command.\n");
+          break;
+        }
         break;
       }
     }
