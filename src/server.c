@@ -28,19 +28,22 @@ void responseToClientInChunk(int clientSocket, const char* response) {
   const char EOT = 4;
   size_t responseLength = strlen(response);
   size_t sentBytes = 0;
+
+  // Allocate the chunk buffer
+  char chunk[MAX_RESPONSE_LENGTH];
+
   while (sentBytes < responseLength) {
     size_t chunkSize = responseLength - sentBytes;
     if (chunkSize > MAX_RESPONSE_LENGTH - 1) {
       chunkSize = MAX_RESPONSE_LENGTH - 1;
     }
 
-    // Copy a chunk of the response to a temporary buffer
-    char chunk[MAX_RESPONSE_LENGTH];
+    // Copy a chunk of the response to the chunk buffer
     memcpy(chunk, response + sentBytes, chunkSize);
     chunk[chunkSize] = '\0';
 
     // Send the chunk to the client
-    if (send(clientSocket, chunk, chunkSize, 0) < 0) {
+    if (send(clientSocket, chunk, strlen(chunk), 0) < 0) {
       perror("Send");
       break;
     }
@@ -53,7 +56,6 @@ void responseToClientInChunk(int clientSocket, const char* response) {
     perror("Send");
   }
 }
-
 
 void handleListCommand(int clientSocket, int* clientSockets) {
   // Create an array to store the client information
@@ -222,7 +224,7 @@ void handlePutCommand(int clientSocket, const char* command) {
 
   struct addrinfo hints, *serverInfo;
   memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_INET;
+  hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
 
   if (getaddrinfo(hostname, NULL, &hints, &serverInfo) != 0) {
@@ -230,10 +232,26 @@ void handlePutCommand(int clientSocket, const char* command) {
     return;
   }
 
-  char serverIP[INET_ADDRSTRLEN];
-  if (inet_ntop(AF_INET, &((struct sockaddr_in*)serverInfo->ai_addr)->sin_addr, serverIP, sizeof(serverIP)) == NULL) {
-    perror("inet_ntop");
-    return;
+  char serverIP[INET6_ADDRSTRLEN];
+  void* serverAddr;
+  if (serverInfo->ai_family == AF_INET) {
+    // IPv4
+    struct sockaddr_in* ipv4 = (struct sockaddr_in*)serverInfo->ai_addr;
+    serverAddr = &(ipv4->sin_addr);
+    if (inet_ntop(AF_INET, serverAddr, serverIP, sizeof(serverIP)) == NULL) {
+      perror("inet_ntop");
+      freeaddrinfo(serverInfo);
+      return;
+    }
+  } else {
+    // IPv6
+    struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)serverInfo->ai_addr;
+    serverAddr = &(ipv6->sin6_addr);
+    if (inet_ntop(AF_INET6, serverAddr, serverIP, sizeof(serverIP)) == NULL) {
+      perror("inet_ntop");
+      freeaddrinfo(serverInfo);
+      return;
+    }
   }
 
   freeaddrinfo(serverInfo);
@@ -256,7 +274,7 @@ void handlePutCommand(int clientSocket, const char* command) {
   responseToClientInChunk(clientSocket, response);
 }
 
-void handleCommand(int clientSocket, int* clientSockets, const char* command) {
+void handleCommand(int clientSocket, int* clientSockets, const char* command, fd_set* master) {
   if (strcmp(command, "List") == 0) {
     handleListCommand(clientSocket, clientSockets);
   }
@@ -268,7 +286,20 @@ void handleCommand(int clientSocket, int* clientSockets, const char* command) {
   }
   else if (strncmp(command, "Put", 3) == 0) {
     handlePutCommand(clientSocket, command);
-  } 
+  }
+  else if (strncmp(command, "Quit", 4) == 0) {
+    // Client requested to quit, close the connection
+    printf("Client requested to quit. Closing connection.\n");
+    close(clientSocket);
+    FD_CLR(clientSocket, master);
+    // Remove the client socket from the array
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+      if (clientSockets[i] == clientSocket) {
+        clientSockets[i] = -1;
+        break;
+      }
+    }
+  }
   else {
     // Invalid command received, force the client to send the right command
     const char* response = "Invalid command. Please send a valid command (List, Files, Get <filename>, Put <filename>)";
@@ -277,15 +308,12 @@ void handleCommand(int clientSocket, int* clientSockets, const char* command) {
 }
 
 int main(int argc, char** argv) {
-  if (argc > 2) {
+  if (argc != 2) {
     printf("Usage: %s [port]\n", argv[0]);
     return 1;
   }
 
-  int serverPort = DEFAULT_PORT;
-  if (argc == 2) {
-    serverPort = atoi(argv[1]);
-  }
+  int serverPort = atoi(argv[1]);
 
   int s_tcp;
   struct sockaddr_storage sa, sa_client;
@@ -383,7 +411,10 @@ int main(int argc, char** argv) {
         }
       }
 
+      // Add the new socket to the master set
       FD_SET(newSocket, &master);
+
+      // Update the maximum file descriptor
       if (newSocket > fdmax) {
         fdmax = newSocket;
       }
@@ -398,7 +429,7 @@ int main(int argc, char** argv) {
           command[n] = '\0';
           printf("Received command from client: %s\n", command);
 
-          handleCommand(clientSockets[i], clientSockets, command);
+          handleCommand(clientSockets[i], clientSockets, command, &master);
         } else if (n == 0) {
           // Connection closed by the client
           printf("Client closed the connection\n");

@@ -11,37 +11,6 @@
 #define MAX_COMMAND_LENGTH 256
 #define MAX_RESPONSE_LENGTH 4096
 
-void responseToClientInChunk(int clientSocket, char* response) {
-  // Send the response to the client in chunks
-  const char EOT = 4;
-  size_t responseLength = strlen(response);
-  size_t sentBytes = 0;
-  while (sentBytes < responseLength) {
-    size_t chunkSize = responseLength - sentBytes;
-    if (chunkSize > MAX_RESPONSE_LENGTH - 1) {
-      chunkSize = MAX_RESPONSE_LENGTH - 1;
-    }
-
-    // Copy a chunk of the response to a temporary buffer
-    char chunk[MAX_RESPONSE_LENGTH];
-    memcpy(chunk, response + sentBytes, chunkSize);
-    chunk[chunkSize] = '\0';
-
-    // Send the chunk to the client
-    if (send(clientSocket, chunk, strlen(chunk), 0) < 0) {
-      perror("Send");
-      break;
-    }
-
-    sentBytes += chunkSize;
-  }
-
-  // Send the EOT delimiter to mark the end of the response
-  if (send(clientSocket, &EOT, sizeof(EOT), 0) < 0) {
-    perror("Send");
-  }
-}
-
 int main(int argc, char** argv) {
   if (argc != 3) {
     printf("Usage: %s <server_address> <server_port>\n", argv[0]);
@@ -102,63 +71,85 @@ int main(int argc, char** argv) {
   freeaddrinfo(serverInfo);
 
   char command[MAX_COMMAND_LENGTH];
+  char response[MAX_RESPONSE_LENGTH];
+  ssize_t bytesRead = 0;
+  int responseComplete = 0;
+
+  // Create a set of file descriptors for select
+  fd_set readfds;
+  int maxfd;
 
   while (1) {
+    FD_ZERO(&readfds);
+    FD_SET(STDIN_FILENO, &readfds);
+    FD_SET(clientSocket, &readfds);
+    maxfd = (STDIN_FILENO > clientSocket) ? STDIN_FILENO : clientSocket;
+
     printf("> ");
     fflush(stdout);
 
-    if (fgets(command, sizeof(command), stdin) == NULL) {
+    // Wait for input from either stdin or the server
+    if (select(maxfd + 1, &readfds, NULL, NULL, NULL) < 0) {
+      perror("Select");
       break;
     }
 
-    // Remove trailing newline character
-    command[strcspn(command, "\n")] = '\0';
+    // Check if there is input from stdin
+    if (FD_ISSET(STDIN_FILENO, &readfds)) {
+      if (fgets(command, sizeof(command), stdin) == NULL) {
+        break;
+      }
 
-    if (strcmp(command, "") == 0) {
-      // Ignore empty command and continue to the next iteration
-      continue;
+      // Remove trailing newline character
+      command[strcspn(command, "\n")] = '\0';
+
+      if (strcmp(command, "") == 0) {
+        // Ignore empty command and continue to the next iteration
+        continue;
+      }
+
+      if (send(clientSocket, command, strlen(command), 0) < 0) {
+        perror("Send");
+        break;
+      }
+
+      responseComplete = 0; // Reset the response completion flag
+
+      // Check if the command is "Quit" to disconnect from the server
+      if (strcmp(command, "Quit") == 0) {
+        printf("Disconnecting from the server.\n");
+        break;
+      }
     }
 
-    if (send(clientSocket, command, strlen(command), 0) < 0) {
-      perror("Send");
-      break;
-    }
-
-    if (strcmp(command, "Quit") == 0) {
-      printf("Exiting...\n");
-      break;
-    }
-
-    // Receive and display the server response
-    char response[MAX_RESPONSE_LENGTH];
-    ssize_t bytesRead = 0;
-    while (1) {
-      ssize_t chunkBytesRead = recv(clientSocket, response + bytesRead, sizeof(response) - bytesRead - 1, 0);
-      if (chunkBytesRead < 0) {
+    // Check if there is input from the server
+    if (FD_ISSET(clientSocket, &readfds)) {
+      bytesRead = recv(clientSocket, response, sizeof(response) - 1, 0);
+      if (bytesRead < 0) {
         perror("Receive");
         break;
-      }
-
-      bytesRead += chunkBytesRead;
-
-      // Check if the end of the response has been reached
-      if (response[bytesRead - 1] == 4) {
-        response[bytesRead - 1] = '\0'; // Remove the EOT delimiter
-        // Check if the response is an error message
-        if (strcmp(response, "Invalid command") == 0) {
-          printf("Invalid command. Please enter a valid command.\n");
-          break;
-        }
+      } else if (bytesRead == 0) {
+        // Server has closed the connection
+        printf("Connection closed by the server.\n");
         break;
       }
+
+      // Null-terminate the received data
+      response[bytesRead] = '\0';
+
+      // Print the received response
+      printf("Response: %s\n", response);
+
+      responseComplete = 1; // Set the response completion flag
     }
 
-    if (bytesRead == 0) {
-      printf("Server closed the connection\n");
-      break;
+    // Check if a complete response is available
+    if (responseComplete) {
+      // Reset bytesRead and response buffer for the next response
+      bytesRead = 0;
+      memset(response, 0, sizeof(response));
+      responseComplete = 0; // Reset the response completion flag
     }
-
-    printf("Response: %s\n", response);
   }
 
   close(clientSocket);
