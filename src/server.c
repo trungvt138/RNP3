@@ -18,11 +18,23 @@
 #define MAX_COMMAND_LENGTH 256
 #define MAX_CLIENTS 10
 
+/**
+ * Store client hostname and port number.
+*/
 typedef struct {
   char hostname[256];
   int port;
 } ClientInfo;
 
+/**
+ * @brief Sends a response to the client in chunks. It splits the response
+ * into smaller chunks and sends them to the client.
+ * 
+ * @param clientSocket The client socket which receives the response.
+ * @param response The response message to be sent to the client.
+ * @return void.
+ * 
+*/
 void responseToClientInChunk(int clientSocket, const char* response) {
   // Send the response to the client in chunks
   const char EOT = 4;
@@ -57,6 +69,14 @@ void responseToClientInChunk(int clientSocket, const char* response) {
   }
 }
 
+/**
+ * @brief etrieves the client information of all connected sockets and 
+ * sends a response to the client with the list of connected clients.
+ * 
+ * @param clientSocket The client socket which receives the response.
+ * @param clientsSockets The array of the connected client sockets.
+ * @return void
+*/
 void handleListCommand(int clientSocket, int* clientSockets) {
   // Create an array to store the client information
   ClientInfo clients[MAX_CLIENTS];
@@ -90,6 +110,13 @@ void handleListCommand(int clientSocket, int* clientSockets) {
   responseToClientInChunk(clientSocket, response);
 }
 
+/**
+ * @brief retrieves the list of files in the server directory and 
+ * sends a response to the client with the file names and their attributes.
+ * 
+ * @param clientSocket The client socket which receives the response.
+ * @return void.
+*/
 void handleFilesCommand(int clientSocket) {
   // Open the server directory
   DIR* dir;
@@ -127,6 +154,14 @@ void handleFilesCommand(int clientSocket) {
   responseToClientInChunk(clientSocket, response);
 }
 
+/**
+ * @brief handles the "Get" command from the client. It extracts the 
+ * filename from the command, reads the file content, and sends a response 
+ * to the client with the file information.
+ * 
+ * @param clientSocket The client socket which receives the response.
+ * @return void.
+*/
 void handleGetCommand(int clientSocket, const char* command) {
   // Parse the command to extract the filename and file attributes
   char filename[256];
@@ -183,6 +218,15 @@ void handleGetCommand(int clientSocket, const char* command) {
   responseToClientInChunk(clientSocket, response);
 }
 
+/**
+ * @brief handles the "Put" command from the client. It receives the file 
+ * data from the client and writes it to a file in the server directory. 
+ * After receiving the file, it sends a response to the client with the 
+ * server hostname, IP address, and current date and time.
+ * 
+ * @param clientSocket The client socket which receives the response.
+ * @return void.
+*/
 void handlePutCommand(int clientSocket, const char* command) {
   // Extract the filename from the command
   const char* filename = command + 4;
@@ -274,6 +318,15 @@ void handlePutCommand(int clientSocket, const char* command) {
   responseToClientInChunk(clientSocket, response);
 }
 
+/**
+ * @brief The function handleCommand is called to handle the client command based on its type. 
+ * It dispatches the command to the appropriate handler function.
+ * 
+ * @param clientSocket the client socket which receives the response.
+ * @param clientSockets the list of the connected client sockets.
+ * @param response the response message to be sent to the client.
+ * @return void.
+*/
 void handleCommand(int clientSocket, int* clientSockets, const char* command, fd_set* master) {
   if (strcmp(command, "List") == 0) {
     handleListCommand(clientSocket, clientSockets);
@@ -308,6 +361,8 @@ void handleCommand(int clientSocket, int* clientSockets, const char* command, fd
 }
 
 int main(int argc, char** argv) {
+  // the server port is passed as a command-line argument and stored in 
+  // the serverPort variable.
   if (argc != 2) {
     printf("Usage: %s [port]\n", argv[0]);
     return 1;
@@ -315,6 +370,8 @@ int main(int argc, char** argv) {
 
   int serverPort = atoi(argv[1]);
 
+  // The socket is created and bound to the specified port using the 
+  // getaddrinfo, socket, and bind functions.
   int s_tcp;
   struct sockaddr_storage sa, sa_client;
   socklen_t sa_len = sizeof(struct sockaddr_storage);
@@ -363,6 +420,7 @@ int main(int argc, char** argv) {
     printf("Server port assigned by the operating system: %d\n", ntohs(ipv6->sin6_port));
   }
 
+  // The server starts listening for TCP connections using the listen function.
   if (listen(s_tcp, 5) < 0) {
     perror("Listen");
     close(s_tcp);
@@ -389,11 +447,15 @@ int main(int argc, char** argv) {
   while (1) {
     read_fds = master;
 
+    // The select function is used to monitor the server socket 
+    // and client sockets for incoming data or connections
     if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) == -1) {
       perror("Select");
       return 1;
     }
 
+    // When a new connection is established, a new client socket is
+    // created, added to the clientSockets array, and added to the master set.
     if (FD_ISSET(s_tcp, &read_fds)) {
       int newSocket;
       if ((newSocket = accept(s_tcp, (struct sockaddr*)&sa_client, &sa_len)) < 0) {
@@ -422,13 +484,18 @@ int main(int argc, char** argv) {
       printf("New connection established\n");
     }
 
+    // The server continues to loop and handle client commands until it is terminated.
     for (int i = 0; i < MAX_CLIENTS; i++) {
+      // If activity is detected on a client socket,
       if (clientSockets[i] != -1 && FD_ISSET(clientSockets[i], &read_fds)) {
         ssize_t n;
+
+        // The received command is read using the recv function.
         if ((n = recv(clientSockets[i], command, sizeof(command) - 1, 0)) > 0) {
           command[n] = '\0';
           printf("Received command from client: %s\n", command);
 
+          // The command is then passed to the handleCommand function for processing.
           handleCommand(clientSockets[i], clientSockets, command, &master);
         } else if (n == 0) {
           // Connection closed by the client

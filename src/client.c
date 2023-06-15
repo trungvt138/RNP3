@@ -12,6 +12,7 @@
 #define MAX_RESPONSE_LENGTH 4096
 
 int main(int argc, char** argv) {
+  // Check the command-line arguments
   if (argc != 3) {
     printf("Usage: %s <server_address> <server_port>\n", argv[0]);
     return 1;
@@ -25,6 +26,7 @@ int main(int argc, char** argv) {
   hints.ai_family = AF_UNSPEC;  // Allow both IPv4 and IPv6
   hints.ai_socktype = SOCK_STREAM;
 
+  // Retrieve the server's address information
   if (getaddrinfo(serverAddress, serverPort, &hints, &serverInfo) != 0) {
     perror("getaddrinfo");
     return 1;
@@ -32,22 +34,27 @@ int main(int argc, char** argv) {
 
   int clientSocket = -1;
   struct addrinfo* p;
+  // Iterate through all the available address information
   for (p = serverInfo; p != NULL; p = p->ai_next) {
+    // Create a socket
     clientSocket = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
     if (clientSocket < 0) {
       perror("Socket");
       continue;
     }
 
+    // Connect to the server
     if (connect(clientSocket, p->ai_addr, p->ai_addrlen) == 0) {
       // Connection successful
       break;
     }
 
+    // Close the socket and try the next address
     close(clientSocket);
     clientSocket = -1;
   }
 
+  // Check if the connection was established
   if (clientSocket < 0) {
     perror("Connect");
     freeaddrinfo(serverInfo);
@@ -68,6 +75,7 @@ int main(int argc, char** argv) {
   inet_ntop(p->ai_family, serverIP, serverAddressStr, sizeof(serverAddressStr));
   printf("Connected to server at %s. Enter commands (List, Files, Get <filename>, Put <filename>, Quit):\n", serverAddressStr);
 
+  // Free the server address information
   freeaddrinfo(serverInfo);
 
   char command[MAX_COMMAND_LENGTH];
@@ -103,11 +111,12 @@ int main(int argc, char** argv) {
       // Remove trailing newline character
       command[strcspn(command, "\n")] = '\0';
 
+      // Ignore empty command and continue to the next iteration
       if (strcmp(command, "") == 0) {
-        // Ignore empty command and continue to the next iteration
         continue;
       }
 
+      // Send the command to the server
       if (send(clientSocket, command, strlen(command), 0) < 0) {
         perror("Send");
         break;
@@ -152,6 +161,7 @@ int main(int argc, char** argv) {
     }
   }
 
+  // Close the client socket
   close(clientSocket);
   return 0;
 }
