@@ -26,7 +26,10 @@ typedef struct {
   int port;
 } ClientInfo;
 
-/**
+struct ServerInfo {
+  char hostname[256];
+  char serverIP[INET6_ADDRSTRLEN];
+};/**
  * @brief Sends a response to the client in chunks. It splits the response
  * into smaller chunks and sends them to the client.
  * 
@@ -67,6 +70,46 @@ void responseToClientInChunk(int clientSocket, const char* response) {
   if (send(clientSocket, &EOT, sizeof(EOT), 0) < 0) {
     perror("Send");
   }
+}
+
+void getServerInfo(struct ServerInfo* info) {
+  if (gethostname(info->hostname, sizeof(info->hostname)) < 0) {
+    perror("gethostname");
+    return;
+  }
+
+  struct addrinfo hints, *serverInfo;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+
+  if (getaddrinfo(info->hostname, NULL, &hints, &serverInfo) != 0) {
+    perror("getaddrinfo");
+    return;
+  }
+
+  void* serverAddr;
+  if (serverInfo->ai_family == AF_INET) {
+    // IPv4
+    struct sockaddr_in* ipv4 = (struct sockaddr_in*)serverInfo->ai_addr;
+    serverAddr = &(ipv4->sin_addr);
+    if (inet_ntop(AF_INET, serverAddr, info->serverIP, sizeof(info->serverIP)) == NULL) {
+      perror("inet_ntop");
+      freeaddrinfo(serverInfo);
+      return;
+    }
+  } else {
+    // IPv6
+    struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)serverInfo->ai_addr;
+    serverAddr = &(ipv6->sin6_addr);
+    if (inet_ntop(AF_INET6, serverAddr, info->serverIP, sizeof(info->serverIP)) == NULL) {
+      perror("inet_ntop");
+      freeaddrinfo(serverInfo);
+      return;
+    }
+  }
+
+  freeaddrinfo(serverInfo);
 }
 
 /**
@@ -260,45 +303,8 @@ void handlePutCommand(int clientSocket, const char* command) {
   fclose(file);
 
   // Get the server hostname and IP address
-  char hostname[256];
-  if (gethostname(hostname, sizeof(hostname)) < 0) {
-    perror("gethostname");
-    return;
-  }
-
-  struct addrinfo hints, *serverInfo;
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-
-  if (getaddrinfo(hostname, NULL, &hints, &serverInfo) != 0) {
-    perror("getaddrinfo");
-    return;
-  }
-
-  char serverIP[INET6_ADDRSTRLEN];
-  void* serverAddr;
-  if (serverInfo->ai_family == AF_INET) {
-    // IPv4
-    struct sockaddr_in* ipv4 = (struct sockaddr_in*)serverInfo->ai_addr;
-    serverAddr = &(ipv4->sin_addr);
-    if (inet_ntop(AF_INET, serverAddr, serverIP, sizeof(serverIP)) == NULL) {
-      perror("inet_ntop");
-      freeaddrinfo(serverInfo);
-      return;
-    }
-  } else {
-    // IPv6
-    struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)serverInfo->ai_addr;
-    serverAddr = &(ipv6->sin6_addr);
-    if (inet_ntop(AF_INET6, serverAddr, serverIP, sizeof(serverIP)) == NULL) {
-      perror("inet_ntop");
-      freeaddrinfo(serverInfo);
-      return;
-    }
-  }
-
-  freeaddrinfo(serverInfo);
+  struct ServerInfo serverInfo;
+  getServerInfo(&serverInfo);
 
   // Get the current date and time
   time_t rawTime;
@@ -361,14 +367,15 @@ void handleCommand(int clientSocket, int* clientSockets, const char* command, fd
 }
 
 int main(int argc, char** argv) {
-  // the server port is passed as a command-line argument and stored in 
-  // the serverPort variable.
-  if (argc != 2) {
-    printf("Usage: %s [port]\n", argv[0]);
-    return 1;
+  // the address and server port is passed as a command-line argument and stored in 
+  // the address and port variable.
+  if (argc != 3) {
+      printf("Usage: %s [address] [port]\n", argv[0]);
+      return 1;
   }
 
-  int serverPort = atoi(argv[1]);
+  const char* address = argv[1];
+  const char* port = argv[2];
 
   // The socket is created and bound to the specified port using the 
   // getaddrinfo, socket, and bind functions.
@@ -381,12 +388,9 @@ int main(int argc, char** argv) {
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_UNSPEC;  // Allow both IPv4 and IPv6
   hints.ai_socktype = SOCK_STREAM;
-  hints.ai_flags = AI_PASSIVE;  // Use the IP address of the host
+  hints.ai_flags = AI_PASSIVE; // Use the local IP address
 
-  char serverPortStr[6];
-  snprintf(serverPortStr, sizeof(serverPortStr), "%d", serverPort);
-
-  if (getaddrinfo(NULL, serverPortStr, &hints, &serverInfo) != 0) {
+  if (getaddrinfo(address, port, &hints, &serverInfo) != 0) {
     perror("getaddrinfo");
     return 1;
   }
