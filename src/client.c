@@ -11,6 +11,48 @@
 #define MAX_COMMAND_LENGTH 256
 #define MAX_RESPONSE_LENGTH 4096
 
+void send_file(int clientSocket, const char* filename) {
+  FILE* file = fopen(filename, "r");
+  if (file == NULL) {
+    perror("fopen");
+    return;
+  }
+
+  char buffer[MAX_RESPONSE_LENGTH];
+  ssize_t bytesRead;
+
+  // Read the file contents and send them to the server
+  while ((bytesRead = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+    if (send(clientSocket, buffer, bytesRead, 0) == -1) {
+      perror("Send");
+      break;
+    }
+  }
+
+  fclose(file);
+}
+
+void receive_file(int clientSocket, const char* filename) {
+  FILE* file = fopen(filename, "w");
+  if (file == NULL) {
+    perror("fopen");
+    return;
+  }
+
+  char buffer[MAX_RESPONSE_LENGTH];
+  ssize_t bytesRead;
+
+  // Receive file data from the server and write it to the file
+  while ((bytesRead = recv(clientSocket, buffer, sizeof(buffer), 0)) > 0) {
+    if (fwrite(buffer, 1, bytesRead, file) != (size_t)bytesRead) {
+      perror("fwrite");
+      break;
+    }
+  }
+
+  fclose(file);
+}
+
 int main(int argc, char** argv) {
   // Check the command-line arguments
   if (argc != 3) {
@@ -128,6 +170,23 @@ int main(int argc, char** argv) {
       if (strcmp(command, "Quit") == 0) {
         printf("Disconnecting from the server.\n");
         break;
+      }
+
+      // Check if the command is "Put <filename>" to send a file to the server
+      if (strncmp(command, "Put ", 4) == 0) {
+        const char* filename = command + 4; // Extract the filename from the command
+        send_file(clientSocket, filename);
+      }
+
+      if (strncmp(command, "Get ", 4) == 0) {
+        // Extract the filename from the command
+        const char* filename = command + 4;
+
+        // Receive the file from the server
+        receive_file(clientSocket, filename);
+
+        printf("Received file: %s\n", filename);
+        responseComplete = 1; // Set the response completion flag
       }
     }
 
