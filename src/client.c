@@ -181,12 +181,6 @@ int main(int argc, char** argv) {
       if (strncmp(command, "Get ", 4) == 0) {
         // Extract the filename from the command
         const char* filename = command + 4;
-
-        // Receive the file from the server
-        receive_file(clientSocket, filename);
-
-        printf("Received file: %s\n", filename);
-        responseComplete = 1; // Set the response completion flag
       }
     }
 
